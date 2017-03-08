@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 """Adds arbitrary data to the Bitcoin blockchain.
 
-Connects to local daemon, pulls relevent data,
+Connects to local daemon, adds custom OP_RETURN data,
 creates, signs and broadcasts a raw transaction.
 """
 
+import redis
 import binascii
 import logging
 import pyqrcode
@@ -22,7 +23,7 @@ __status__ = "Draft"
 
 #Logging system
 logger = logging.getLogger('create_engine_js.py')
-hdlr = logging.FileHandler('/Users/rusticbison/sandbox/blockchain_data_project/info.log')
+hdlr = logging.FileHandler('/Users/rusticbison/sandbox/blockchain_data/info.log')
 formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 hdlr.setFormatter(formatter)
 logger.addHandler(hdlr)
@@ -34,34 +35,26 @@ rpcworker = connection.BitcoinConnection(credentials.rpcuser, credentials.rpcpas
 #select the very first unspent transaction available on local bitcoind client
 first_unspent = rpcworker.listunspent()[0]
 
+#collect the transaction id, number of outputs and amount available from the first unspent transaction
 txid = first_unspent.txid
 vout = first_unspent.vout
-input_amount = first_unspent.amount
+first_unspent_amount = Decimal(first_unspent.amount)
 
-#set fee and precision, type decimal
-fee_amount = Decimal("0.00002").quantize(Decimal("0.00000001"), rounding=ROUND_UP) #one satoshi for rounding
-
-#calculate the amount to be sent to the raw change address, type decimal
-# change_amount = input_amount - fee_amount
-
-
-#some light error handling, in case there's not enough money available
-# if change_amount <= 0:
-#     logger.error('Insufficient funds. Change amount is %s' % change_amount)
-#     print('Insufficient funds. Current balance is %s' % input_amount)
-#     exit()
-
-#cheater hard coded change address - add getrawchangeaddress to the library ASAP!
-# change_address = rpcworker.getnewaddress()
+#gather fresh addresses for change and receiving in own wallet
 raw_change_address = rpcworker.getrawchangeaddress()
 new_bitcoin_address = rpcworker.getnewaddress()
-primary_output_value = 0.0001
-primary_change_value = round((primary_output_value - 0.00003),8)
 
-# print(primary_change_value)
-# exit()
+#specify fee
+fee = Decimal(0.000005) #fee of about $0.06 USD. Probably not enough, as it is taking forever to get this into the network.
 
-# Data to insert
+#for some reason the RPC barfs if you try to send the full amount. Splitting the value sent seems to work ok.
+send_amount = first_unspent_amount / 2
+change_amount = (first_unspent_amount / 2) - fee
+
+change_amount_string = "%.8f" % change_amount
+send_amount_string = "%.8f" % send_amount
+
+# Data to insert in OP_RETURN
 data = "@rusticbison"
 if len(data) > 75:
     raise Exception("Too much data, use OP_PUSHDATA1 instead")
@@ -69,57 +62,27 @@ hex_format_data = binascii.hexlify(data)
 
 #use built-in function to create raw transaction, just add data field with op-return in it:
 hexstring = rpcworker.createrawtransaction(
-                [{"txid": txid, "vout": vout}], {"data": hex_format_data, new_bitcoin_address: primary_output_value, raw_change_address: primary_change_value})
-logger.info(hexstring)
+                [{"txid": txid, "vout": vout}], {"data": hex_format_data, new_bitcoin_address: send_amount_string, raw_change_address: change_amount_string})
 
+#fire up the redis database, start storing some data
+r = redis.StrictRedis()
 
+#a super lazy way to get a uniuqe ID, then save it to the redis database alongside the transaction id and hex
+unique_id = rpcworker.getnewaddress()
+r.hmset(unique_id, {'transactionid': txid, 'transactionhexstring': hexstring})
 
 # sign_raw_transaction = rpcworker.signrawtransaction(hexstring, {"txid": txid, "vout": vout})
-sign_raw_transaction = rpcworker.signrawtransaction(hexstring, previous_transactions=None, private_keys=None)
+#for review: sendrawtransaction "hexstring" ( allowhighfees )
+try:
+    sign_raw_transaction = rpcworker.signrawtransaction(hexstring, previous_transactions=None, private_keys=None)
+except SomeError as err:
+    logger.warn("signing error")
+    raise DifferentError()
 
-logger.info(sign_raw_transaction)
+print("Success! Search this key via redis-cli and the hgetall command to find your transaction details:")
+#this is important, if you lose this you have no way to look up transaction details.
+print(unique_id)
 
-#added getrawchangeaddress
-#added sendrawtransaction
-
+#broadcast to network
 send_raw_transaction = rpcworker.sendrawtransaction(sign_raw_transaction)
-
-
-#reference:
-
-# > curl --user myusername --data-binary '{"jsonrpc": "1.0", "id":"curltest", "method": "createrawtransaction", "params": ["[{\"txid\":\"myid\",\"vout\":0}]",
-#                 "{\"data\":\"00010203\"}"] }' -H 'content-type: text/plain;' http://127.0.0.1:8332/
-#
-#                 '[{"txid": txid,"vout":1,"scriptPubKey":"scriptPubKey"}]' '{"mtRWdkBpAyz8pUoCYobABvnEe1xFPqvkJN":0.36972432}'
-#                 '[{"txid":"scriptPubKey","vout":1,"scriptPubKey":"scriptPubKey"}]' '{"receiveingaddress":0.1,"changeaddress":0.26972432}'
-
-
-# external examples
-# rawtxn = rpcworker.createrawtransaction(
-#                 [{"txid": "a9d4599e15b53f3eb531608ddb31f48c695c3d0b3538a6bda871e8b34f2f430c",
-#                   "vout": 0}],
-#                 {"1B9nCoZxEdKspVJ3xxqUN97FtgqGzLY9Ba":50})
-# print(rpcworker.getconnectioncount())
-# print(rpcworker.getdifficulty())
-# print(rpcworker.getinfo())
-# print(rpcworker.getbalance())
-# new_bitcoin_address = rpcworker.getnewaddress()
-# new_qr_code = pyqrcode.create(new_bitcoin_address, version=5)
-
-#To create an OP_RETURN transaction yourself, you may use this template:
-#0100000001AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABB00000000ffffffff0100000000000000004e6a4cCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC00000000
-#Replace AA...A with the input transaction hash flipped, BB with vout, CC...C with your payload/message.
-
-# Go back to your debug console and type "decoderawtransaction XXX", whereby XXX is your modified transaction hex. If everything is fine, this should return some information about your transaction.
-#
-# You may adjust the payload length by changing the 4e and 4c. Use a calculator to convert the numbers.
-#
-# http://brainwallet.org/#converter has a hex to text and vice versa converter.
-#
-# When you are finished, type: "signrawtransaction XXX", whereby XXX is your transaction hex. It should show a longer hex followed by "complete".
-#
-# Copy that longer hash and type "sendrawtransaction YYY", whereby YYY is the signed transaction hex.
-#
-# Last note: make sure you use only an input with 0.0001-ish BTC. It will all be considered as miner fee unless you add more outputs.
-
 exit()
