@@ -67,12 +67,12 @@ hexstring = rpcworker.createrawtransaction(
 #fire up the redis database, start storing some data
 r = redis.StrictRedis()
 
-#a super lazy way to get a uniuqe ID, then save it to the redis database alongside the transaction id and hex
+#lazy way to get a uniuqe ID, then save it to the redis database alongside the transaction id and hex
 unique_id = rpcworker.getnewaddress()
 r.hmset(unique_id, {'transactionid': txid, 'transactionhexstring': hexstring})
 
 # sign_raw_transaction = rpcworker.signrawtransaction(hexstring, {"txid": txid, "vout": vout})
-#for review: sendrawtransaction "hexstring" ( allowhighfees )
+# for review: sendrawtransaction "hexstring" ( allowhighfees )
 try:
     sign_raw_transaction = rpcworker.signrawtransaction(hexstring, previous_transactions=None, private_keys=None)
 except SomeError as err:
@@ -84,5 +84,9 @@ print("Success! Search this key via redis-cli and the hgetall command to find yo
 print(unique_id)
 
 #broadcast to network
-send_raw_transaction = rpcworker.sendrawtransaction(sign_raw_transaction)
+try:
+    send_raw_transaction = rpcworker.sendrawtransaction(sign_raw_transaction)
+except Exception:
+    logger.warn("Broadcast error, probably the fee threshold issue with the daemon.")
+    print("Just one thing: it wasn't broadcasted. Use https://blockr.io/tx/push to broadcast until I fix the function.")
 exit()
