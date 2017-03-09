@@ -1,2 +1,2 @@
 rpcuser='bitcoinrpc'
-rpcpassword='mymassivefuckingballs'
+rpcpassword='abc'
