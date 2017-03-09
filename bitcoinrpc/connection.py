@@ -351,6 +351,17 @@ class BitcoinConnection(object):
         """
         return dict(self.proxy.decoderawtransaction(hexstring))
 
+    def estimatefee(self, blocks):
+        """
+        Returns the estimated fee required to have the transaction included in n blocks.
+
+        Arguments:
+
+        - *blocks* -- integer between 1 and 7.
+
+        """
+        return self.proxy.estimatefee(blocks)
+
     def listsinceblock(self, block_hash):
         res = self.proxy.listsinceblock(block_hash)
         res['transactions'] = [TransactionInfo(**x) for x in res['transactions']]

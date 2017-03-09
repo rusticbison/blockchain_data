@@ -19,7 +19,7 @@ __license__ = "GPL"
 __version__ = "0.0.1"
 __maintainer__ = "Justin Smith"
 __email__ = "js.06@icloud.com"
-__status__ = "Draft"
+__status__ = "Draft 8.3.2017"
 
 #Logging system
 logger = logging.getLogger('create_engine_js.py')
@@ -44,19 +44,25 @@ first_unspent_amount = Decimal(first_unspent.amount)
 raw_change_address = rpcworker.getrawchangeaddress()
 new_bitcoin_address = rpcworker.getnewaddress()
 
-#specify fee
-fee = Decimal(0.000005) #fee of about $0.06 USD. Probably not enough, as it is taking forever to get this into the network.
+#estimate and specify fee
+fee = rpcworker.estimatefee(6)
 
 #for some reason the RPC barfs if you try to send the full amount. Splitting the value sent seems to work ok.
 send_amount = first_unspent_amount / 2
 change_amount = (first_unspent_amount / 2) - fee
 
+if change_amount < 0.00001: #price floor for fees
+    logger.warn(change_amount)
+    raise Exception("Insufficient funds")
+
+#convert from decimal to float, for use in JSON
 change_amount_string = "%.8f" % change_amount
 send_amount_string = "%.8f" % send_amount
 
 # Data to insert in OP_RETURN
 data = "@rusticbison"
 if len(data) > 75:
+    logger.warn('Data length is %s' len(data))
     raise Exception("Too much data, use OP_PUSHDATA1 instead")
 hex_format_data = binascii.hexlify(data)
 
